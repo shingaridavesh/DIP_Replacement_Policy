@@ -310,7 +310,9 @@ cache_create(char *name,		/* name of the cache */
   cp->assoc = assoc;
   cp->policy = policy;
   cp->hit_latency = hit_latency;
-
+  cp->PSEL = 511;		/*DaveshShingari-Initialization of PSEL saturating counter*/
+  cp->throttle1=0;
+  cp->throttle2=0;
   /* miss/replacement functions */
   cp->blk_access_fn = blk_access_fn;
 
@@ -409,6 +411,7 @@ cache_char2policy(char c)		/* replacement policy as a char */
   case 'l': return LRU;
   case 'r': return Random;
   case 'f': return FIFO;
+  case 'd': return DIP;
   default: fatal("bogus replacement policy, `%c'", c);
   }
 }
@@ -575,6 +578,62 @@ cache_access(struct cache_t *cp,	/* cache to access */
     repl = cp->sets[set].way_tail;
     update_way_list(&cp->sets[set], repl, Head);
     break;
+  case DIP:
+	  //printf("In DIP and cache is %s and set is %d\n", cp->name, set);	
+	  if (set  == 0 || set%1024==0 || set % 33 == 0)	/*LRU Implementation*/
+	  {       //printf("In LRU with set %d\n",set);
+		  repl = cp->sets[set].way_tail;
+		  update_way_list(&cp->sets[set], repl, Head);
+		  if (cp->PSEL < 1023)
+			  cp->PSEL++;
+		  break;
+	  }
+	  if (set % 31 == 0)					/*BIP Implementation*/
+	  {       //printf("In BIP with set %d\n",set);
+		  if (cp->throttle1==31)             
+		  {       // printf("In BIP LRU\n");
+			  repl = cp->sets[set].way_tail;
+			  update_way_list(&cp->sets[set], repl, Head);
+			  cp->throttle1=0;
+		  }
+		  else
+		  {       //printf("In BIP LIP\n");
+			  repl = cp->sets[set].way_tail;	
+			  update_way_list(&cp->sets[set], repl, Tail);
+			  cp->throttle1++;
+			  //printf("Throttle1=%d\n",cp->throttle1);
+		  }
+		  if (cp->PSEL > 0)
+			  cp->PSEL--;
+		  break;
+	  }
+	  else
+	  {       //printf("In follower with PSEL value=%d\n",cp->PSEL);
+		  if (cp->PSEL<511)
+		  {
+			  repl = cp->sets[set].way_tail;
+			  update_way_list(&cp->sets[set], repl, Head);
+			  break;
+		  }
+		  else
+		  {
+			  if (cp->throttle2==31)
+			  {
+				  repl = cp->sets[set].way_tail;
+				  update_way_list(&cp->sets[set], repl, Head);
+				  cp->throttle2=0;
+			  }
+			  else
+			  {
+				  repl = cp->sets[set].way_tail;
+				  update_way_list(&cp->sets[set], repl, Tail);
+				  cp->throttle2++;
+				  //printf("Throttle2=%d\n",cp->throttle2);
+			  }
+		  	  break;
+		  }
+	  }
+
   case Random:
     {
       int bindex = myrand() & (cp->assoc - 1);
@@ -648,7 +707,7 @@ cache_access(struct cache_t *cp,	/* cache to access */
   /* link this entry back into the hash table */
   if (cp->hsize)
     link_htab_ent(cp, &cp->sets[set], repl);
-
+  
   /* return latency of the operation */
   return lat;
 
@@ -670,6 +729,12 @@ cache_access(struct cache_t *cp,	/* cache to access */
 
   /* if LRU replacement and this is not the first element of list, reorder */
   if (blk->way_prev && cp->policy == LRU)
+    {
+      /* move this block to head of the way (MRU) list */
+      update_way_list(&cp->sets[set], blk, Head);
+    }
+
+  if (blk->way_prev && cp->policy == DIP)
     {
       /* move this block to head of the way (MRU) list */
       update_way_list(&cp->sets[set], blk, Head);
